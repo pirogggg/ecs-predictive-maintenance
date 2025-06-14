@@ -15,6 +15,10 @@ def run_prediction(df):
         "Bleed Pressure": "Bleed Air Pressure (psi)"
     }, inplace=True)
 
+    # Автоматический расчет Temp Deviation, если не хватает
+    if "Temp Deviation (°C)" not in df.columns and        "Cabin Temp Setpoint (°C)" in df.columns and        "Cabin Actual Temp (°C)" in df.columns:
+        df["Temp Deviation (°C)"] = df["Cabin Temp Setpoint (°C)"] - df["Cabin Actual Temp (°C)"]
+
     required_columns = [
         "Pack Outlet Temp (°C)", "Fan Speed (rpm)", "Temp Deviation (°C)",
         "Valve Position (%)", "Bleed Air Pressure (psi)", "Failure in 10h"
@@ -102,3 +106,4 @@ def run_prediction(df):
     print("ROC-AUC:", roc_auc_score(y_test, y_proba))
 
     return df, fig_roc, fig_temp, fig_dtemp, fig_shap, status
+
