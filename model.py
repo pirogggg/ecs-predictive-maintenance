@@ -6,29 +6,27 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score, roc_curve
 
 def run_prediction(df):
-    # Добавление новых признаков
-    # Используем .copy() для df, чтобы избежать SettingWithCopyWarning при inplace=True
+    # Используем .copy() для df, чтобы избежать SettingWithCopyWarning
     df_processed = df.copy() 
     df_processed.rename(columns={
-        "Pack Outlet Temp (Â°C)": "Pack Outlet Temp (°C)",
+        "Pack Outlet Temp (Â°C)": "Pack Outlet Temp (°C)", # Исправление кодировки
         "Fan Speed": "Fan Speed (rpm)",
-        "Temperature Deviation": "Temp Deviation (°C)",
+        "Temperature Deviation": "Temp Deviation (°C)", # Исправление кодировки
         "Valve Position": "Valve Position (%)",
         "Bleed Pressure": "Bleed Air Pressure (psi)",
-        # Добавляем целевую переменную на случай, если ее название отличается
-        "Failure": "Failure in 10h" 
+        "Failure": "Failure in 10h" # На случай, если целевая колонка называется просто "Failure"
     }, inplace=True)
 
-    # Автоматический расчет Temp Deviation, если не хватает
+    # Автоматический расчет Temp Deviation, если она отсутствует, но есть необходимые колонки
     if "Temp Deviation (°C)" not in df_processed.columns and \
        "Cabin Temp Setpoint (°C)" in df_processed.columns and \
        "Cabin Actual Temp (°C)" in df_processed.columns:
+        # Убедитесь, что эти колонки также используют правильный символ градуса, если они есть в Excel.
         df_processed["Temp Deviation (°C)"] = df_processed["Cabin Temp Setpoint (°C)"] - df_processed["Cabin Actual Temp (°C)"]
 
-    # Теперь используем df_processed для всех дальнейших операций
-    df = df_processed 
+    df = df_processed # Теперь работаем с обработанным DataFrame
 
-    # Define all required columns including those that might be created
+    # Определение всех необходимых колонок, включая те, что могут быть созданы
     required_core_columns = [
         "Pack Outlet Temp (°C)", "Fan Speed (rpm)", "Temp Deviation (°C)",
         "Valve Position (%)", "Bleed Air Pressure (psi)", "Failure in 10h"
@@ -45,6 +43,7 @@ def run_prediction(df):
                 "Обеспечьте наличие 'Temperature Deviation' (оригинальное название) "
                 "ИЛИ обеих колонок 'Cabin Temp Setpoint (°C)' и 'Cabin Actual Temp (°C)' в вашем Excel-файле для автоматического расчета."
             )
+            # Удаляем Temp Deviation из списка, чтобы не повторять сообщение
             missing_columns_initial.remove("Temp Deviation (°C)") 
         
         if missing_columns_initial: 
@@ -53,8 +52,10 @@ def run_prediction(df):
                 f"Пожалуйста, убедитесь, что файл `ecs_data.xlsx` содержит все нужные данные."
             )
         
+        # Возвращаем пустые фигуры и DataFrame при ошибке для корректной работы app.py
         return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), "\n".join(status_messages), plt.figure()
 
+    # Добавление новых признаков на основе данных
     df["dTemp"] = df["Pack Outlet Temp (°C)"].diff().fillna(0)
     df["Temp_MA10"] = df["Pack Outlet Temp (°C)"].rolling(window=10).mean().bfill()
     df["Valve_range_10"] = df["Valve Position (%)"].rolling(window=10).apply(lambda x: max(x) - min(x), raw=False).fillna(0)
@@ -70,8 +71,16 @@ def run_prediction(df):
         "Valve_range_10"
     ]
     
-    # Обработка NaN в X перед обучением и SHAP
+    # *** НОВОЕ ИЗМЕНЕНИЕ: Явное преобразование всех колонок признаков в числовой формат ***
+    # Это крайне важно для стабильной работы моделей и SHAP, а также для обработки смешанных типов данных.
+    for col in features:
+        if col in df.columns: # Убедимся, что колонка существует
+            # Преобразуем в числовой формат, ошибки (нечисловые значения) принудительно станут NaN
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Заполнение NaN нулями после преобразования. Это обрабатывает как исходные NaN, так и NaN из-за ошибок преобразования.
     X = df[features].fillna(0) 
+
     y = df["Failure in 10h"]
 
     # Проверка на достаточное количество классов для обучения
@@ -80,6 +89,7 @@ def run_prediction(df):
                  "Невозможно выполнить обучение модели классификации. Убедитесь, что в данных есть как отказы, так и их отсутствие."
         return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure()
 
+    # Проверка, что достаточно данных для train_test_split после стратификации
     unique_classes, counts = y.value_counts().index, y.value_counts().values
     if any(count < 2 for count in counts):
          status = "🔴 Ошибка: Недостаточно сэмплов для одного из классов в колонке 'Failure in 10h' " \
@@ -92,11 +102,12 @@ def run_prediction(df):
                  "Проверьте исходный файл данных."
         return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure()
 
-
+    # Разделение данных на обучающую и тестовую выборки
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42
     )
 
+    # Обучение модели RandomForestClassifier
     model = RandomForestClassifier(
         n_estimators=200,
         max_depth=6,
@@ -105,6 +116,7 @@ def run_prediction(df):
     )
     model.fit(X_train, y_train)
 
+    # Предсказания и расчет метрик
     y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
     roc_auc = roc_auc_score(y_test, y_proba) 
@@ -125,16 +137,19 @@ def run_prediction(df):
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X_test) 
     
-    # *** ИСПРАВЛЕНИЕ ОШИБКИ: Удален аргумент 'ax' из shap.summary_plot ***
-    # shap.summary_plot самостоятельно создает и управляет фигурой при show=False.
-    # Чтобы получить эту фигуру, мы используем plt.gcf() (Get Current Figure) сразу после вызова SHAP.
-    shap.summary_plot(shap_values[1], X_test, plot_type="bar", show=False)
+    # *** ИСПРАВЛЕНИЕ ОШИБКИ: Гарантируем, что X_test для SHAP имеет правильные колонки и порядок ***
+    # Создаем новый DataFrame из X_test с явным указанием колонок из 'features'
+    # Это устраняет потенциальные проблемы с несоответствием порядка или названий колонок в shap.summary_plot
+    X_test_for_shap_plot = pd.DataFrame(X_test, columns=features)
+    
+    shap.summary_plot(shap_values[1], X_test_for_shap_plot, plot_type="bar", show=False)
     fig_shap = plt.gcf() # Получаем текущую фигуру Matplotlib, созданную SHAP
     fig_shap.set_size_inches(10, 7) # Устанавливаем размер фигуры
     fig_shap.tight_layout() # Улучшение компоновки
     plt.close(fig_shap) # Закрываем фигуру, чтобы она не отображалась сразу, а только через Streamlit
 
     # Добавление предсказанных отказов в исходный DataFrame
+    # Используем модель, обученную на X, для предсказаний по всему df
     df["Predicted Failure"] = model.predict(X)
 
     # Построение графика температуры PACK с предсказанными отказами
@@ -184,7 +199,6 @@ def run_prediction(df):
 
     # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib и статус
     return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
-
 
     # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib и статус
     return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
