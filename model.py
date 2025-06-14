@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np # Добавлено, так как используется в Colab коде
 import shap
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
@@ -53,9 +54,10 @@ def run_prediction(df):
             )
         
         # Возвращаем пустые фигуры и DataFrame при ошибке для корректной работы app.py
+        # Добавлено 6 значений, чтобы app.py мог их корректно распаковать
         return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), "\n".join(status_messages), plt.figure()
 
-    # Добавление новых признаков на основе данных
+    # Создание дополнительных признаков
     df["dTemp"] = df["Pack Outlet Temp (°C)"].diff().fillna(0)
     df["Temp_MA10"] = df["Pack Outlet Temp (°C)"].rolling(window=10).mean().bfill()
     df["Valve_range_10"] = df["Valve Position (%)"].rolling(window=10).apply(lambda x: max(x) - min(x), raw=False).fillna(0)
@@ -71,16 +73,12 @@ def run_prediction(df):
         "Valve_range_10"
     ]
     
-    # *** НОВОЕ ИЗМЕНЕНИЕ: Явное преобразование всех колонок признаков в числовой формат ***
-    # Это крайне важно для стабильной работы моделей и SHAP, а также для обработки смешанных типов данных.
+    # Явное преобразование всех колонок признаков в числовой формат и заполнение NaN
     for col in features:
-        if col in df.columns: # Убедимся, что колонка существует
-            # Преобразуем в числовой формат, ошибки (нечисловые значения) принудительно станут NaN
+        if col in df.columns: 
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Заполнение NaN нулями после преобразования. Это обрабатывает как исходные NaN, так и NaN из-за ошибок преобразования.
     X = df[features].fillna(0) 
-
     y = df["Failure in 10h"]
 
     # Проверка на достаточное количество классов для обучения
@@ -126,7 +124,7 @@ def run_prediction(df):
     fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
     ax_roc.plot(fpr, tpr, label=f"AUC = {roc_auc:.2f}")
     ax_roc.plot([0, 1], [0, 1], linestyle="--", color="gray", alpha=0.7)
-    ax_roc.set_title("ROC-кривая", fontsize=14)
+    ax_roc.set_title("ROC-кривая модели", fontsize=14) # Обновлен заголовок для ясности
     ax_roc.set_xlabel("False Positive Rate", fontsize=12)
     ax_roc.set_ylabel("True Positive Rate", fontsize=12)
     ax_roc.legend(fontsize=10)
@@ -134,48 +132,69 @@ def run_prediction(df):
     fig_roc.tight_layout() 
 
     # Построение SHAP-графика для объяснения важности признаков
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_test) 
-    
-    # *** ИСПРАВЛЕНИЕ ОШИБКИ: Гарантируем, что X_test для SHAP имеет правильные колонки и порядок ***
-    # Создаем новый DataFrame из X_test с явным указанием колонок из 'features'
-    # Это устраняет потенциальные проблемы с несоответствием порядка или названий колонок в shap.summary_plot
-    X_test_for_shap_plot = pd.DataFrame(X_test, columns=features)
-    
-    shap.summary_plot(shap_values[1], X_test_for_shap_plot, plot_type="bar", show=False)
-    fig_shap = plt.gcf() # Получаем текущую фигуру Matplotlib, созданную SHAP
-    fig_shap.set_size_inches(10, 7) # Устанавливаем размер фигуры
-    fig_shap.tight_layout() # Улучшение компоновки
-    plt.close(fig_shap) # Закрываем фигуру, чтобы она не отображалась сразу, а только через Streamlit
+    # Используем data=X_train для TreeExplainer, как в Colab
+    explainer = shap.TreeExplainer(model, data=X_train) 
+    shap_values = explainer.shap_values(X_test)
+
+    # Логика обработки shap_values из Colab для выбора positive_class
+    shap_values_positive_class = None
+    if isinstance(shap_values, list):
+        if len(shap_values) > 1:
+            shap_values_positive_class = shap_values[1] # Для бинарной классификации, класс 1
+        else:
+            shap_values_positive_class = shap_values[0] # Если список, но только один элемент
+    else:
+        if shap_values.ndim == 3 and shap_values.shape[2] == 2:
+            shap_values_positive_class = shap_values[:, :, 1]
+        elif shap_values.ndim == 2:
+            shap_values_positive_class = shap_values
+        else:
+            print(f"Unexpected shap_values shape: {shap_values.shape}") # Отладочный вывод
+
+    fig_shap = plt.figure(figsize=(10, 7)) # Создаем фигуру перед вызовом shap.summary_plot
+    if shap_values_positive_class is not None:
+        # Гарантируем, что X_test для SHAP имеет правильные колонки и порядок
+        X_test_for_shap_plot = pd.DataFrame(X_test, columns=features)
+        
+        # Добавлена проверка на совпадение форм перед вызовом
+        if shap_values_positive_class.shape[1] == X_test_for_shap_plot.shape[1]:
+            shap.summary_plot(shap_values_positive_class, X_test_for_shap_plot, plot_type="bar", show=False, feature_names=features)
+        else:
+            print(f"Shape mismatch before SHAP plotting: shap_values_positive_class.shape={shap_values_positive_class.shape}, X_test_for_shap_plot.shape={X_test_for_shap_plot.shape}")
+            # Fallback: попытаться сбросить названия колонок, если проблема в них
+            shap.summary_plot(shap_values_positive_class, X_test_for_shap_plot.values, plot_type="bar", show=False, feature_names=features)
+            
+    fig_shap.tight_layout() 
+    # Внимание: plt.close(fig_shap) здесь не нужен, так как Streamlit сам управляет отображением.
+    # Он будет закрыт после того, как Streamlit его использует.
 
     # Добавление предсказанных отказов в исходный DataFrame
-    # Используем модель, обученную на X, для предсказаний по всему df
     df["Predicted Failure"] = model.predict(X)
 
     # Построение графика температуры PACK с предсказанными отказами
-    fig_temp, ax2 = plt.subplots(figsize=(12, 6))
-    ax2.plot(df["Pack Outlet Temp (°C)"].reset_index(drop=True), label="Температура PACK", color="blue", linewidth=1.5)
-    ax2.scatter(df[df["Predicted Failure"] == 1].index,
+    fig_temp, ax_temp = plt.subplots(figsize=(12, 6)) # Переименовал ax2 в ax_temp для единообразия
+    ax_temp.plot(df["Pack Outlet Temp (°C)"].reset_index(drop=True), label="Температура PACK", color="blue", linewidth=1.5)
+    ax_temp.scatter(df[df["Predicted Failure"] == 1].index,
                 df.loc[df["Predicted Failure"] == 1, "Pack Outlet Temp (°C)"],
                 color="red", label="Предсказан отказ", s=50, zorder=5, alpha=0.7) 
-    ax2.set_title("Температура PACK с предсказанными отказами", fontsize=14)
-    ax2.set_xlabel("Точки данных", fontsize=12)
-    ax2.set_ylabel("Температура PACK (°C)", fontsize=12)
-    ax2.grid(True, linestyle='--', alpha=0.6)
-    ax2.legend(fontsize=10)
+    ax_temp.set_title("Температура PACK с предсказанными отказами", fontsize=14) # Обновлен заголовок
+    ax_temp.set_xlabel("Точки данных", fontsize=12) # Обновлен заголовок оси X
+    ax_temp.set_ylabel("Температура PACK (°C)", fontsize=12) # Обновлен заголовок оси Y
+    ax_temp.grid(True, linestyle='--', alpha=0.6)
+    ax_temp.legend(fontsize=10)
     fig_temp.tight_layout()
 
     # Построение графика производной температуры PACK с предсказанными отказами
-    fig_dtemp, ax3 = plt.subplots(figsize=(12, 6))
-    ax3.plot(df["dTemp"].reset_index(drop=True), label="Производная температуры (dTemp)", color="orange", linewidth=1.5)
-    ax3.scatter(df[df["Predicted Failure"] == 1].index,
+    fig_dtemp, ax_dtemp = plt.subplots(figsize=(12, 6)) # Переименовал ax3 в ax_dtemp для единообразия
+    ax_dtemp.plot(df["dTemp"].reset_index(drop=True), label="Производная температуры (dTemp)", color="orange", linewidth=1.5)
+    ax_dtemp.scatter(df[df["Predicted Failure"] == 1].index,
                 df.loc[df["Predicted Failure"] == 1, "dTemp"],
                 color="red", label="Предсказан отказ", s=50, zorder=5, alpha=0.7)
-    ax3.set_title("Производная температуры PACK с предсказанными отказами", fontsize=14)
-    ax3.set_xlabel("Точки данных", fontsize=12)
-    ax3.set_ylabel("dTemp (°C/точка)", fontsize=12)
-    ax3.grid(True, linestyle='--', alpha=0.6)
-    ax3.legend(fontsize=10)
+    ax_dtemp.set_title("Производная температуры PACK с предсказанными отказами", fontsize=14) # Обновлен заголовок
+    ax_dtemp.set_xlabel("Точки данных", fontsize=12) # Обновлен заголовок оси X
+    ax_dtemp.set_ylabel("dTemp (°C/точка)", fontsize=12) # Обновлен заголовок оси Y
+    ax_dtemp.grid(True, linestyle='--', alpha=0.6)
+    ax_dtemp.legend(fontsize=10)
     fig_dtemp.tight_layout()
 
     # Формирование диагностического заключения
@@ -198,9 +217,6 @@ def run_prediction(df):
         print(f"Ошибка при выводе отчета классификации или ROC-AUC: {e}")
 
     # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib и статус
+    # Порядок: df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
     return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
-
-    # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib и статус
-    return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
-
 
