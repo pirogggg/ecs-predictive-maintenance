@@ -7,14 +7,20 @@ import matplotlib.pyplot as plt
 import shap
 
 def run_prediction(df):
-    # ✅ Проверка наличия нужных колонок
-    required_columns = [
-        "Pack Outlet Temp (Â°C)", "Fan Speed (rpm)", "Temp Deviation (Â°C)",
-        "Valve Position (%)", "Bleed Air Pressure (psi)", "Failure in 10h"
-    ]
-    missing = [col for col in required_columns if col not in df.columns]
-    if missing:
-        raise KeyError(f"❌ В таблице отсутствуют необходимые столбцы: {missing}")
+ # Унификация названий столбцов
+df.rename(columns={
+    "Pack Outlet Temp (Â°C)": "Pack Outlet Temp (°C)"
+}, inplace=True)
+
+# Проверка
+required_columns = [
+    "Pack Outlet Temp (°C)", "Fan Speed (rpm)", "Temp Deviation (°C)",
+    "Valve Position (%)", "Bleed Air Pressure (psi)", "Failure in 10h"
+]
+missing = [col for col in required_columns if col not in df.columns]
+if missing:
+    raise KeyError(f"❌ Отсутствуют колонки: {missing}")
+
 
     # ✅ Создание производных признаков
     df["dTemp"] = df["Pack Outlet Temp (Â°C)"].diff().fillna(0)
