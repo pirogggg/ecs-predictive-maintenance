@@ -10,8 +10,7 @@ def run_prediction(df):
     # Используем .copy() для df, чтобы избежать SettingWithCopyWarning
     df_processed = df.copy() 
     
-    # *** ИЗМЕНЕНИЕ: Добавляем точное название столбца из вашего Excel-файла ***
-    # Обратите внимание на 'Temp Deviation (Valve Position) (%)'
+    # Переименование колонок для стандартизации названий
     df_processed.rename(columns={
         "Pack Outlet Temp (Â°C)": "Pack Outlet Temp (°C)", # Исправление кодировки
         "Fan Speed": "Fan Speed (rpm)",
@@ -26,7 +25,6 @@ def run_prediction(df):
 
     # Автоматический расчет Temp Deviation, если она отсутствует ИЛИ если ее исходное название не было распознано,
     # НО при этом есть необходимые колонки для расчета.
-    # Это условие теперь будет реже выполняться, так как мы напрямую переименовываем 'Temp Deviation (Valve Position) (%)'
     if "Temp Deviation (°C)" not in df_processed.columns and \
        "Cabin Temp Setpoint (°C)" in df_processed.columns and \
        "Cabin Actual Temp (°C)" in df_processed.columns:
@@ -60,20 +58,18 @@ def run_prediction(df):
             )
         
         # Возвращаем пустые фигуры и DataFrame при ошибке для корректной работы app.py
-        return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), "\n".join(status_messages), plt.figure()
+        # Теперь возвращаем 8 значений, чтобы соответствовать app.py
+        return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), "\n".join(status_messages), plt.figure(), "", ""
 
     # Создание дополнительных признаков
     df["dTemp"] = df["Pack Outlet Temp (°C)"].diff().fillna(0)
     df["Temp_MA10"] = df["Pack Outlet Temp (°C)"].rolling(window=10).mean().bfill()
     df["Valve_range_10"] = df["Valve Position (%)"].rolling(window=10).apply(lambda x: max(x) - min(x), raw=False).fillna(0)
 
-    # *** ИЗМЕНЕНИЕ: Обновляем список features, чтобы он отражал вашу новую колонку Temperature Deviation
-    # Так как мы ее уже переименовали в 'Temp Deviation (°C)', здесь ничего менять не нужно,
-    # просто убедимся, что она соответствует.
     features = [
         "Pack Outlet Temp (°C)",
         "Fan Speed (rpm)",
-        "Temp Deviation (°C)", # Это уже будет переименованная колонка
+        "Temp Deviation (°C)", 
         "Valve Position (%)",
         "Bleed Air Pressure (psi)",
         "dTemp",
@@ -93,20 +89,20 @@ def run_prediction(df):
     if y.nunique() < 2:
         status = "🔴 Ошибка: Целевая колонка 'Failure in 10h' содержит менее двух уникальных значений. " \
                  "Невозможно выполнить обучение модели классификации. Убедитесь, что в данных есть как отказы, так и их отсутствие."
-        return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure()
+        return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure(), "", ""
 
     # Проверка, что достаточно данных для train_test_split после стратификации
     unique_classes, counts = y.value_counts().index, y.value_counts().values
     if any(count < 2 for count in counts):
          status = "🔴 Ошибка: Недостаточно сэмплов для одного из классов в колонке 'Failure in 10h' " \
                   "для стратифицированного разделения данных. Убедитесь, что каждый класс содержит не менее 2 записей."
-         return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure()
+         return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure(), "", ""
 
     # Проверка соответствия размеров X и y
     if len(X) != len(y):
         status = "🔴 Ошибка: Количество строк в признаках (X) и целевой переменной (y) не совпадает. " \
                  "Проверьте исходный файл данных."
-        return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure()
+        return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), status, plt.figure(), "", ""
 
     # Разделение данных на обучающую и тестовую выборки
     X_train, X_test, y_train, y_test = train_test_split(
@@ -211,15 +207,21 @@ def run_prediction(df):
     else:
         status = "🟢 Система функционирует стабильно."
 
-    # Отладочная информация (будет выведена в консоль Streamlit)
+    # Сохранение отчета классификации и ROC-AUC как строк
+    classification_report_str = ""
+    roc_auc_str = ""
     try:
-        print(classification_report(y_test, y_pred, zero_division=0))
-        print("ROC-AUC:", roc_auc_score(y_test, y_proba))
+        classification_report_str = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
+        # Преобразуем отчет в более читаемый формат HTML или текст
+        classification_report_str = pd.DataFrame(classification_report_str).transpose().to_html()
+        
+        roc_auc_str = f"ROC-AUC: {roc_auc_score(y_test, y_proba):.2f}"
     except Exception as e:
-        print(f"Ошибка при выводе отчета классификации или ROC-AUC: {e}")
+        classification_report_str = f"Ошибка при генерации отчета классификации: {e}"
+        roc_auc_str = f"Ошибка при расчете ROC-AUC: {e}"
 
-    # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib и статус
-    # Порядок: df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
-    return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
+    # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib, статус и отчеты
+    # Порядок: df, fig_roc, fig_temp, fig_dtemp, status, fig_shap, classification_report_str, roc_auc_str
+    return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap, classification_report_str, roc_auc_str
 
 
