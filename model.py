@@ -1,5 +1,5 @@
 import pandas as pd
-import numpy as np # Добавлено, так как используется в Colab коде
+import numpy as np 
 import shap
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
@@ -9,20 +9,27 @@ from sklearn.metrics import classification_report, roc_auc_score, roc_curve
 def run_prediction(df):
     # Используем .copy() для df, чтобы избежать SettingWithCopyWarning
     df_processed = df.copy() 
+    
+    # *** ИЗМЕНЕНИЕ: Добавляем точное название столбца из вашего Excel-файла ***
+    # Обратите внимание на 'Temp Deviation (Valve Position) (%)'
     df_processed.rename(columns={
         "Pack Outlet Temp (Â°C)": "Pack Outlet Temp (°C)", # Исправление кодировки
         "Fan Speed": "Fan Speed (rpm)",
-        "Temperature Deviation": "Temp Deviation (°C)", # Исправление кодировки
+        "Temperature Deviation": "Temp Deviation (°C)", # Старое название, которое мы теперь можем игнорировать
+        "Temp Deviation (Valve Position) (%)": "Temp Deviation (°C)", # НОВОЕ: Переименовываем вашу колонку в стандартное имя
         "Valve Position": "Valve Position (%)",
         "Bleed Pressure": "Bleed Air Pressure (psi)",
-        "Failure": "Failure in 10h" # На случай, если целевая колонка называется просто "Failure"
+        "Failure": "Failure in 10h", # На случай, если целевая колонка называется просто "Failure"
+        "Cabin Temp Setpoint (Â°C)": "Cabin Temp Setpoint (°C)", # Исправление кодировки
+        "Cabin Actual Temp (Â°C)": "Cabin Actual Temp (°C)" # Исправление кодировки
     }, inplace=True)
 
-    # Автоматический расчет Temp Deviation, если она отсутствует, но есть необходимые колонки
+    # Автоматический расчет Temp Deviation, если она отсутствует ИЛИ если ее исходное название не было распознано,
+    # НО при этом есть необходимые колонки для расчета.
+    # Это условие теперь будет реже выполняться, так как мы напрямую переименовываем 'Temp Deviation (Valve Position) (%)'
     if "Temp Deviation (°C)" not in df_processed.columns and \
        "Cabin Temp Setpoint (°C)" in df_processed.columns and \
        "Cabin Actual Temp (°C)" in df_processed.columns:
-        # Убедитесь, что эти колонки также используют правильный символ градуса, если они есть в Excel.
         df_processed["Temp Deviation (°C)"] = df_processed["Cabin Temp Setpoint (°C)"] - df_processed["Cabin Actual Temp (°C)"]
 
     df = df_processed # Теперь работаем с обработанным DataFrame
@@ -40,11 +47,10 @@ def run_prediction(df):
         status_messages = []
         if "Temp Deviation (°C)" in missing_columns_initial:
             status_messages.append(
-                "❌ Колонка 'Temp Deviation (°C)' отсутствует. "
-                "Обеспечьте наличие 'Temperature Deviation' (оригинальное название) "
-                "ИЛИ обеих колонок 'Cabin Temp Setpoint (°C)' и 'Cabin Actual Temp (°C)' в вашем Excel-файле для автоматического расчета."
+                "❌ Колонка 'Temp Deviation (°C)' отсутствует после всех попыток переименования/расчета. "
+                "Пожалуйста, убедитесь, что в вашем Excel-файле присутствует либо 'Temp Deviation (Valve Position) (%)', "
+                "либо 'Temperature Deviation', ИЛИ обе колонки 'Cabin Temp Setpoint (°C)' и 'Cabin Actual Temp (°C)'."
             )
-            # Удаляем Temp Deviation из списка, чтобы не повторять сообщение
             missing_columns_initial.remove("Temp Deviation (°C)") 
         
         if missing_columns_initial: 
@@ -54,7 +60,6 @@ def run_prediction(df):
             )
         
         # Возвращаем пустые фигуры и DataFrame при ошибке для корректной работы app.py
-        # Добавлено 6 значений, чтобы app.py мог их корректно распаковать
         return pd.DataFrame(), plt.figure(), plt.figure(), plt.figure(), "\n".join(status_messages), plt.figure()
 
     # Создание дополнительных признаков
@@ -62,10 +67,13 @@ def run_prediction(df):
     df["Temp_MA10"] = df["Pack Outlet Temp (°C)"].rolling(window=10).mean().bfill()
     df["Valve_range_10"] = df["Valve Position (%)"].rolling(window=10).apply(lambda x: max(x) - min(x), raw=False).fillna(0)
 
+    # *** ИЗМЕНЕНИЕ: Обновляем список features, чтобы он отражал вашу новую колонку Temperature Deviation
+    # Так как мы ее уже переименовали в 'Temp Deviation (°C)', здесь ничего менять не нужно,
+    # просто убедимся, что она соответствует.
     features = [
         "Pack Outlet Temp (°C)",
         "Fan Speed (rpm)",
-        "Temp Deviation (°C)",
+        "Temp Deviation (°C)", # Это уже будет переименованная колонка
         "Valve Position (%)",
         "Bleed Air Pressure (psi)",
         "dTemp",
@@ -124,7 +132,7 @@ def run_prediction(df):
     fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
     ax_roc.plot(fpr, tpr, label=f"AUC = {roc_auc:.2f}")
     ax_roc.plot([0, 1], [0, 1], linestyle="--", color="gray", alpha=0.7)
-    ax_roc.set_title("ROC-кривая модели", fontsize=14) # Обновлен заголовок для ясности
+    ax_roc.set_title("ROC-кривая модели", fontsize=14)
     ax_roc.set_xlabel("False Positive Rate", fontsize=12)
     ax_roc.set_ylabel("True Positive Rate", fontsize=12)
     ax_roc.legend(fontsize=10)
@@ -132,7 +140,6 @@ def run_prediction(df):
     fig_roc.tight_layout() 
 
     # Построение SHAP-графика для объяснения важности признаков
-    # Используем data=X_train для TreeExplainer, как в Colab
     explainer = shap.TreeExplainer(model, data=X_train) 
     shap_values = explainer.shap_values(X_test)
 
@@ -140,59 +147,54 @@ def run_prediction(df):
     shap_values_positive_class = None
     if isinstance(shap_values, list):
         if len(shap_values) > 1:
-            shap_values_positive_class = shap_values[1] # Для бинарной классификации, класс 1
+            shap_values_positive_class = shap_values[1] 
         else:
-            shap_values_positive_class = shap_values[0] # Если список, но только один элемент
+            shap_values_positive_class = shap_values[0] 
     else:
         if shap_values.ndim == 3 and shap_values.shape[2] == 2:
             shap_values_positive_class = shap_values[:, :, 1]
         elif shap_values.ndim == 2:
             shap_values_positive_class = shap_values
         else:
-            print(f"Unexpected shap_values shape: {shap_values.shape}") # Отладочный вывод
+            print(f"Unexpected shap_values shape: {shap_values.shape}") 
 
-    fig_shap = plt.figure(figsize=(10, 7)) # Создаем фигуру перед вызовом shap.summary_plot
+    fig_shap = plt.figure(figsize=(10, 7)) 
     if shap_values_positive_class is not None:
-        # Гарантируем, что X_test для SHAP имеет правильные колонки и порядок
         X_test_for_shap_plot = pd.DataFrame(X_test, columns=features)
         
-        # Добавлена проверка на совпадение форм перед вызовом
         if shap_values_positive_class.shape[1] == X_test_for_shap_plot.shape[1]:
             shap.summary_plot(shap_values_positive_class, X_test_for_shap_plot, plot_type="bar", show=False, feature_names=features)
         else:
             print(f"Shape mismatch before SHAP plotting: shap_values_positive_class.shape={shap_values_positive_class.shape}, X_test_for_shap_plot.shape={X_test_for_shap_plot.shape}")
-            # Fallback: попытаться сбросить названия колонок, если проблема в них
             shap.summary_plot(shap_values_positive_class, X_test_for_shap_plot.values, plot_type="bar", show=False, feature_names=features)
             
     fig_shap.tight_layout() 
-    # Внимание: plt.close(fig_shap) здесь не нужен, так как Streamlit сам управляет отображением.
-    # Он будет закрыт после того, как Streamlit его использует.
 
     # Добавление предсказанных отказов в исходный DataFrame
     df["Predicted Failure"] = model.predict(X)
 
     # Построение графика температуры PACK с предсказанными отказами
-    fig_temp, ax_temp = plt.subplots(figsize=(12, 6)) # Переименовал ax2 в ax_temp для единообразия
+    fig_temp, ax_temp = plt.subplots(figsize=(12, 6)) 
     ax_temp.plot(df["Pack Outlet Temp (°C)"].reset_index(drop=True), label="Температура PACK", color="blue", linewidth=1.5)
     ax_temp.scatter(df[df["Predicted Failure"] == 1].index,
                 df.loc[df["Predicted Failure"] == 1, "Pack Outlet Temp (°C)"],
                 color="red", label="Предсказан отказ", s=50, zorder=5, alpha=0.7) 
-    ax_temp.set_title("Температура PACK с предсказанными отказами", fontsize=14) # Обновлен заголовок
-    ax_temp.set_xlabel("Точки данных", fontsize=12) # Обновлен заголовок оси X
-    ax_temp.set_ylabel("Температура PACK (°C)", fontsize=12) # Обновлен заголовок оси Y
+    ax_temp.set_title("Температура PACK с предсказанными отказами", fontsize=14) 
+    ax_temp.set_xlabel("Точки данных", fontsize=12) 
+    ax_temp.set_ylabel("Температура PACK (°C)", fontsize=12) 
     ax_temp.grid(True, linestyle='--', alpha=0.6)
     ax_temp.legend(fontsize=10)
     fig_temp.tight_layout()
 
     # Построение графика производной температуры PACK с предсказанными отказами
-    fig_dtemp, ax_dtemp = plt.subplots(figsize=(12, 6)) # Переименовал ax3 в ax_dtemp для единообразия
+    fig_dtemp, ax_dtemp = plt.subplots(figsize=(12, 6)) 
     ax_dtemp.plot(df["dTemp"].reset_index(drop=True), label="Производная температуры (dTemp)", color="orange", linewidth=1.5)
     ax_dtemp.scatter(df[df["Predicted Failure"] == 1].index,
                 df.loc[df["Predicted Failure"] == 1, "dTemp"],
                 color="red", label="Предсказан отказ", s=50, zorder=5, alpha=0.7)
-    ax_dtemp.set_title("Производная температуры PACK с предсказанными отказами", fontsize=14) # Обновлен заголовок
-    ax_dtemp.set_xlabel("Точки данных", fontsize=12) # Обновлен заголовок оси X
-    ax_dtemp.set_ylabel("dTemp (°C/точка)", fontsize=12) # Обновлен заголовок оси Y
+    ax_dtemp.set_title("Производная температуры PACK с предсказанными отказами", fontsize=14) 
+    ax_dtemp.set_xlabel("Точки данных", fontsize=12) 
+    ax_dtemp.set_ylabel("dTemp (°C/точка)", fontsize=12) 
     ax_dtemp.grid(True, linestyle='--', alpha=0.6)
     ax_dtemp.legend(fontsize=10)
     fig_dtemp.tight_layout()
@@ -219,4 +221,5 @@ def run_prediction(df):
     # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib и статус
     # Порядок: df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
     return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap
+
 
