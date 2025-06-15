@@ -125,13 +125,14 @@ def run_prediction(df):
     fpr, tpr, _ = roc_curve(y_test, y_proba)
 
     # Построение ROC-кривой
-    fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
+    # ИЗМЕНЕНИЕ: Уменьшаем размер графика ROC-кривой
+    fig_roc, ax_roc = plt.subplots(figsize=(6, 4)) # Уменьшил размер
     ax_roc.plot(fpr, tpr, label=f"AUC = {roc_auc:.2f}")
     ax_roc.plot([0, 1], [0, 1], linestyle="--", color="gray", alpha=0.7)
-    ax_roc.set_title("ROC-кривая модели", fontsize=14)
-    ax_roc.set_xlabel("False Positive Rate", fontsize=12)
-    ax_roc.set_ylabel("True Positive Rate", fontsize=12)
-    ax_roc.legend(fontsize=10)
+    ax_roc.set_title("ROC-кривая модели", fontsize=12) # Возможно, уменьшить размер шрифта для меньшего графика
+    ax_roc.set_xlabel("False Positive Rate", fontsize=10) # Уменьшить размер шрифта
+    ax_roc.set_ylabel("True Positive Rate", fontsize=10) # Уменьшить размер шрифта
+    ax_roc.legend(fontsize=9) # Уменьшить размер шрифта легенды
     ax_roc.grid(True, linestyle='--', alpha=0.6)
     fig_roc.tight_layout() 
 
@@ -212,7 +213,6 @@ def run_prediction(df):
     roc_auc_str = ""
     try:
         classification_report_str = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
-        # Преобразуем отчет в более читаемый формат HTML или текст
         classification_report_str = pd.DataFrame(classification_report_str).transpose().to_html()
         
         roc_auc_str = f"ROC-AUC: {roc_auc_score(y_test, y_proba):.2f}"
@@ -221,7 +221,6 @@ def run_prediction(df):
         roc_auc_str = f"Ошибка при расчете ROC-AUC: {e}"
 
     # Возвращаем обновленный DataFrame, все объекты фигур Matplotlib, статус и отчеты
-    # Порядок: df, fig_roc, fig_temp, fig_dtemp, status, fig_shap, classification_report_str, roc_auc_str
     return df, fig_roc, fig_temp, fig_dtemp, status, fig_shap, classification_report_str, roc_auc_str
 
 
